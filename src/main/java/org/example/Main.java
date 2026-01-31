@@ -2,7 +2,11 @@ package org.example;
 
 public class Main {
     public static void main(String[] args) {
-        DownloadDocs downloader = new DownloadDocs();
-        downloader.executar();
+
+        // Baixa os arquivos e extrai arquivos .zip
+        new DownloadDocs().executar();
+
+        //Processar dados
+        new ProcessarDados().processar();
     }
 }
