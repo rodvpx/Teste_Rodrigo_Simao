@@ -55,7 +55,7 @@ public class ProcessarDados {
             int idxDescricao = -1;
             int idxValor = -1;
             int idxData = -1;
-            int idxRegAns = -1;
+            int idxCdContaContabil = -1;
 
             // Identifica índices das colunas
             for (int i = 0; i < cabecalho.length; i++) {
@@ -63,23 +63,25 @@ public class ProcessarDados {
                 if (col.contains("DESCRICAO")) idxDescricao = i;
                 else if (col.contains("VL_SALDO_FINAL")) idxValor = i;
                 else if (col.contains("DATA")) idxData = i;
-                else if (col.contains("REG_ANS")) idxRegAns = i;
+                else if (col.contains("CD_CONTA_CONTABIL")) idxCdContaContabil = i;
             }
 
-            if (idxDescricao == -1) {
-                System.out.println("Coluna DESCRICAO não encontrada em " + arquivo.getFileName());
+            if (idxDescricao == -1 || idxCdContaContabil == -1) {
+                System.out.println("Colunas não encontradas em " + arquivo.getFileName());
                 return;
             }
 
             String[] linha;
             while ((linha = csvReader.readNext()) != null) {
                 // Verifica se a linha tem colunas suficientes e se a descrição corresponde
-                if (linha.length > idxDescricao && 
+                if (linha.length > idxDescricao &&
                     linha[idxDescricao].contains("Despesas com Eventos/Sinistros")) {
                     
                     String dataStr = (idxData != -1 && linha.length > idxData) ? linha[idxData] : "";
                     String valorStr = (idxValor != -1 && linha.length > idxValor) ? linha[idxValor] : "0";
-                    String regAns = (idxRegAns != -1 && linha.length > idxRegAns) ? linha[idxRegAns] : "";
+                    String cdContaContabil = (idxCdContaContabil != -1 && linha.length > idxCdContaContabil) ? linha[idxCdContaContabil] : "";
+                    String descricao = (idxDescricao != -1 && linha.length > idxDescricao) ? linha[idxDescricao] : "";
+
 
                     // Processa data para obter Trimestre e Ano
                     String trimestre = "";
@@ -98,8 +100,7 @@ public class ProcessarDados {
                     String valor = valorStr.replace(",", ".");
 
                     // Escreve linha no CSV consolidado
-                    // Como não temos CNPJ e Razão Social nos arquivos, usamos REG_ANS no lugar de CNPJ e deixamos Razão Social vazia
-                    writer.writeNext(new String[]{regAns, "", trimestre, ano, valor});
+                    writer.writeNext(new String[]{cdContaContabil, descricao, trimestre, ano, valor});
                 }
             }
 
