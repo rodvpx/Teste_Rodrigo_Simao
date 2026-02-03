@@ -1,112 +1,110 @@
 package org.example;
 
+import com.opencsv.CSVParserBuilder;
 import com.opencsv.CSVReader;
 import com.opencsv.CSVReaderBuilder;
+import com.opencsv.CSVWriter;
 import com.opencsv.exceptions.CsvValidationException;
 
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.Reader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.sql.*;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 
 public class ProcessarDados {
 
     public void processar() {
-        String url = "jdbc:sqlite:despesas.db";
+        Path dir = Paths.get("src/main/java/org/docs");
+        Path arquivoSaida = dir.resolve("consolidado_despesas");
 
-        try (Connection conn = DriverManager.getConnection(url)) {
-            criarTabela(conn);
+        // Cria o arquivo de saída e escreve o cabeçalho
+        try (CSVWriter writer = new CSVWriter(new FileWriter(arquivoSaida.toFile()))) {
+            writer.writeNext(new String[]{"CNPJ", "RazaoSocial", "Trimestre", "Ano", "ValorDespesas"});
 
-            Path dir = Paths.get("src/main/java/org/docs");
             try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir, "*.csv")) {
                 for (Path arquivo : stream) {
-                    processarArquivo(arquivo, conn);
+                    // Ignora o arquivo de saída se ele estiver na mesma pasta
+                    if (arquivo.getFileName().toString().equals("consolidado_despesas")) continue;
+                    
+                    System.out.println("Processando arquivo: " + arquivo.getFileName());
+                    processarArquivo(arquivo, writer);
                 }
             }
-        } catch (SQLException | IOException e) {
+            System.out.println("Consolidação concluída em: " + arquivoSaida);
+        } catch (IOException e) {
             e.printStackTrace();
         }
     }
 
-    private void criarTabela(Connection conn) throws SQLException {
-        String sql = """
-            CREATE TABLE IF NOT EXISTS despesas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tipo TEXT,
-                valor REAL,
-                data TEXT
-            )
-            """;
-        conn.createStatement().execute(sql);
-    }
+    private void processarArquivo(Path arquivo, CSVWriter writer) {
 
-    private void processarArquivo(Path arquivo, Connection conn) throws IOException, SQLException {
-        try (Reader reader = Files.newBufferedReader(arquivo);
-             CSVReader csvReader = new CSVReaderBuilder(reader).build()) {
+        try (Reader reader = Files.newBufferedReader(arquivo, StandardCharsets.ISO_8859_1);
+             CSVReader csvReader = new CSVReaderBuilder(reader)
+                     .withCSVParser(new CSVParserBuilder().withSeparator(';').build())
+                     .build()) {
 
-            String[] cabecalho = csvReader.readNext(); // Primeira linha: colunas
+            String[] cabecalho = csvReader.readNext();
             if (cabecalho == null) return;
 
-            // Encontra índice da coluna relevante
-            int indiceTipo = -1, indiceValor = -1, indiceData = -1;
+            int idxDescricao = -1;
+            int idxValor = -1;
+            int idxData = -1;
+            int idxRegAns = -1;
+
+            // Identifica índices das colunas
             for (int i = 0; i < cabecalho.length; i++) {
-                String col = cabecalho[i].trim().toLowerCase();
-                if (col.contains("tipo") || col.contains("descrição")) indiceTipo = i;
-                if (col.contains("valor")) indiceValor = i;
-                if (col.contains("data")) indiceData = i;
+                String col = cabecalho[i].trim().toUpperCase();
+                if (col.contains("DESCRICAO")) idxDescricao = i;
+                else if (col.contains("VL_SALDO_FINAL")) idxValor = i;
+                else if (col.contains("DATA")) idxData = i;
+                else if (col.contains("REG_ANS")) idxRegAns = i;
             }
 
-            if (indiceTipo == -1) return; // Sem coluna para filtrar
+            if (idxDescricao == -1) {
+                System.out.println("Coluna DESCRICAO não encontrada em " + arquivo.getFileName());
+                return;
+            }
 
-            // Bulk insert preparado
-            String sql = "INSERT INTO despesas (tipo, valor, data) VALUES (?, ?, ?)";
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                conn.setAutoCommit(false);
+            String[] linha;
+            while ((linha = csvReader.readNext()) != null) {
+                // Verifica se a linha tem colunas suficientes e se a descrição corresponde
+                if (linha.length > idxDescricao && 
+                    linha[idxDescricao].contains("Despesas com Eventos/Sinistros")) {
+                    
+                    String dataStr = (idxData != -1 && linha.length > idxData) ? linha[idxData] : "";
+                    String valorStr = (idxValor != -1 && linha.length > idxValor) ? linha[idxValor] : "0";
+                    String regAns = (idxRegAns != -1 && linha.length > idxRegAns) ? linha[idxRegAns] : "";
 
-                String[] linha;
-                boolean temDespesas = false;
-                int count = 0;
-
-                while ((linha = csvReader.readNext()) != null) {
-                    if (linha.length > indiceTipo &&
-                            linha[indiceTipo].trim().contains("Despesas com Eventos/Sinistros")) {
-
-                        pstmt.setString(1, linha[indiceTipo]);
-                        pstmt.setString(3, indiceData < linha.length ? linha[indiceData] : "");
-
+                    // Processa data para obter Trimestre e Ano
+                    String trimestre = "";
+                    String ano = "";
+                    if (!dataStr.isEmpty()) {
                         try {
-                            pstmt.setDouble(2, indiceValor < linha.length ?
-                                    Double.parseDouble(linha[indiceValor].replace(",", ".")) : 0);
-                        } catch (NumberFormatException e) {
-                            pstmt.setDouble(2, 0);
-                        }
-
-                        pstmt.addBatch();
-                        temDespesas = true;
-                        count++;
-
-                        if (count % 1000 == 0) {
-                            pstmt.executeBatch();
-                            pstmt.clearBatch();
+                            LocalDate data = LocalDate.parse(dataStr, DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+                            ano = String.valueOf(data.getYear());
+                            trimestre = String.valueOf((data.getMonthValue() - 1) / 3 + 1);
+                        } catch (Exception e) {
+                            // Data inválida, mantém vazio
                         }
                     }
-                }
 
-                if (count % 1000 != 0) {
-                    pstmt.executeBatch();
-                }
+                    // Formata valor (substitui vírgula por ponto se necessário)
+                    String valor = valorStr.replace(",", ".");
 
-                conn.commit();
-                if (temDespesas) {
-                    System.out.println("Processou " + count + " despesas de " + arquivo.getFileName());
+                    // Escreve linha no CSV consolidado
+                    // Como não temos CNPJ e Razão Social nos arquivos, usamos REG_ANS no lugar de CNPJ e deixamos Razão Social vazia
+                    writer.writeNext(new String[]{regAns, "", trimestre, ano, valor});
                 }
             }
-        } catch (CsvValidationException e) {
-            throw new RuntimeException(e);
+
+        } catch (IOException | CsvValidationException e) {
+            System.err.println("Erro ao ler arquivo " + arquivo + ": " + e.getMessage());
         }
     }
-
 }
